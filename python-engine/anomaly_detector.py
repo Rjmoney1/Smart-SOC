@@ -20,6 +20,7 @@ load_dotenv(Path(__file__).parent.parent / '.env')
 
 DB_CONFIG = {
     'host':    os.getenv('DB_HOST', 'localhost'),
+    'port':    int(os.getenv('DB_PORT', '3306')),
     'user':    os.getenv('DB_USER', 'root'),
     'password':os.getenv('DB_PASS', ''),
     'db':      os.getenv('DB_NAME', 'cyber_ai_platform'),
@@ -39,14 +40,14 @@ class AnomalyDetector:
 
     def get_features(self, conn, hours=24):
         """Extract features from recent log entries"""
-        cutoff = (datetime.now() - timedelta(hours=hours)).strftime('%Y-%m-%d %H:%M:%S')
+        cutoff = (datetime.utcnow() - timedelta(hours=hours)).strftime('%Y-%m-%d %H:%M:%S')
         with conn.cursor() as cur:
             # Failed login counts per IP per hour
             cur.execute("""
                 SELECT ip_address,
                        COUNT(*) as total_events,
                        SUM(CASE WHEN severity IN ('critical','high') THEN 1 ELSE 0 END) as high_severity,
-                       SUM(CASE WHEN action LIKE '%fail%' THEN 1 ELSE 0 END) as failures,
+                       SUM(CASE WHEN action LIKE '%%fail%%' THEN 1 ELSE 0 END) as failures,
                        COUNT(DISTINCT action) as unique_actions,
                        HOUR(MAX(created_at)) as last_hour
                 FROM logs
@@ -58,7 +59,7 @@ class AnomalyDetector:
 
     def get_alert_features(self, conn, hours=24):
         """Extract alert-based features"""
-        cutoff = (datetime.now() - timedelta(hours=hours)).strftime('%Y-%m-%d %H:%M:%S')
+        cutoff = (datetime.utcnow() - timedelta(hours=hours)).strftime('%Y-%m-%d %H:%M:%S')
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT source_ip,
@@ -154,7 +155,7 @@ class AnomalyDetector:
                     anomaly['severity'],
                     anomaly['ip'],
                     anomaly['risk_score'],
-                    datetime.now()
+                    datetime.utcnow()
                 ))
             conn.commit()
 

@@ -64,7 +64,7 @@ class PacketSniffer:
                 cur.execute("""
                     INSERT INTO alerts (title, description, severity, status, attack_type, source_ip, target_port, protocol, risk_score, created_at)
                     VALUES (%s, %s, %s, 'open', %s, %s, %s, %s, %s, %s)
-                """, (title, description, severity, attack_type, source_ip, target_port, protocol, risk, datetime.now()))
+                """, (title, description, severity, attack_type, source_ip, target_port, protocol, risk, datetime.utcnow()))
             conn.commit()
             conn.close()
             logger.warning(f"ALERT: {title} from {source_ip}")

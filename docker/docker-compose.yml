@@ -17,7 +17,7 @@ services:
       MYSQL_PASSWORD: CyberAI_Secure_2024!
 
     ports:
-      - "3306:3306"
+      - "3307:3306"
 
     volumes:
       - mysql_data:/var/lib/mysql
@@ -197,7 +197,7 @@ services:
       PMA_PASSWORD: rootpassword
 
     ports:
-      - "8080:80"
+      - "8081:80"
 
     networks:
       - cyberai_net

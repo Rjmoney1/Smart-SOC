@@ -42,6 +42,9 @@ include __DIR__ . '/includes/header.php';
                     </div>
                     <div class="hidden sm:flex items-center gap-2">
                         <span class="text-xs text-slate-500 font-mono"><?= date('D, M j Y · H:i') ?> UTC</span>
+                        <button onclick="triggerOverviewRefresh()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/5 transition-colors">
+                            <i id="overview-refresh-icon" data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Refresh
+                        </button>
                         <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-green-500/10 border border-green-500/20">
                             <span class="live-dot w-1.5 h-1.5 rounded-full bg-green-400"></span>
                             <span class="text-xs text-green-400 font-medium">Live</span>
@@ -53,10 +56,10 @@ include __DIR__ . '/includes/header.php';
                 <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-in">
                     <?php
                     $cards = [
-                        ['label'=>'Total Alerts',     'value'=>$stats['total_alerts'],    'icon'=>'bell-ring',     'color'=>'blue',   'change'=>'+12%'],
-                        ['label'=>'Critical Threats', 'value'=>$stats['critical_alerts'], 'icon'=>'shield-x',      'color'=>'red',    'change'=>'-3%'],
-                        ['label'=>'Blocked IPs',      'value'=>$stats['blocked_ips'],     'icon'=>'ban',           'color'=>'orange', 'change'=>'+5'],
-                        ['label'=>'AI Reports',       'value'=>$stats['ai_reports'],      'icon'=>'brain-circuit',  'color'=>'purple', 'change'=>'+8'],
+                        ['label'=>'Total Alerts',     'value'=>$stats['total_alerts'],    'icon'=>'bell-ring',     'color'=>'blue',   'change'=>'+12%', 'key'=>'total_alerts'],
+                        ['label'=>'Critical Threats', 'value'=>$stats['critical_alerts'], 'icon'=>'shield-x',      'color'=>'red',    'change'=>'-3%', 'key'=>'critical_alerts'],
+                        ['label'=>'Blocked IPs',      'value'=>$stats['blocked_ips'],     'icon'=>'ban',           'color'=>'orange', 'change'=>'+5',  'key'=>'blocked_ips'],
+                        ['label'=>'AI Reports',       'value'=>$stats['ai_reports'],      'icon'=>'brain-circuit',  'color'=>'purple', 'change'=>'+8',  'key'=>'ai_reports'],
                     ];
                     $colors = [
                         'blue'   => ['bg'=>'bg-blue-500/10',   'icon'=>'text-blue-400',   'border'=>'border-blue-500/20'],
@@ -76,7 +79,7 @@ include __DIR__ . '/includes/header.php';
                                 <?= $card['change'] ?>
                             </span>
                         </div>
-                        <div class="text-3xl font-bold text-white mb-1" data-counter="<?= $card['value'] ?>">
+                        <div class="text-3xl font-bold text-white mb-1" data-counter="<?= $card['value'] ?>" data-stat-key="<?= $card['key'] ?>">
                             <?= number_format($card['value']) ?>
                         </div>
                         <div class="text-sm text-slate-500"><?= $card['label'] ?></div>
@@ -122,7 +125,7 @@ include __DIR__ . '/includes/header.php';
                                 View all <i data-lucide="arrow-right" class="w-3 h-3"></i>
                             </a>
                         </div>
-                        <div class="divide-y divide-white/5">
+                        <div id="recent-alerts-list" class="divide-y divide-white/5">
                             <?php if (empty($recentAlerts)): ?>
                             <div class="px-5 py-10 text-center text-slate-600 text-sm">
                                 <i data-lucide="shield-check" class="w-8 h-8 mx-auto mb-2 text-slate-700"></i>
@@ -311,12 +314,15 @@ loadChartData();
 
 // Live Attack Feed
 const severityColors = { critical:'text-red-400', high:'text-orange-400', medium:'text-yellow-400', low:'text-blue-400', info:'text-slate-400' };
-function updateAttackFeed() {
+
+function updateAttackFeed(callback) {
     fetch('<?= APP_URL ?>/dashboard/api/get_alerts.php?limit=10&format=feed')
         .then(r => r.json())
         .then(d => {
+            if (callback) callback();
             if (!d.alerts) return;
             const feed = document.getElementById('attack-feed');
+            if (!feed) return;
             feed.innerHTML = d.alerts.map(a => `
                 <div class="flex items-start gap-3 animate-slide-up">
                     <span class="text-slate-600 flex-shrink-0">${new Date(a.created_at).toLocaleTimeString('en-US',{hour12:false})}</span>
@@ -326,24 +332,148 @@ function updateAttackFeed() {
                 </div>
             `).join('') || '<div class="text-slate-600">No recent activity</div>';
         }).catch(() => {
-            const feed = document.getElementById('attack-feed');
-            const demo = [
-                { t:'19:30:12', s:'info',   ip:'System',     msg:'Security monitoring engine started' },
-                { t:'19:30:45', s:'medium', ip:'10.0.0.15',  msg:'Port scan detected on ports 22,80,443' },
-                { t:'19:31:02', s:'high',   ip:'192.168.1.5',msg:'Multiple failed SSH login attempts (7 attempts)' },
-                { t:'19:31:30', s:'low',    ip:'10.0.0.22',  msg:'Suspicious outbound connection to 45.33.32.156' },
-            ];
-            feed.innerHTML = demo.map(d => `
-                <div class="flex items-start gap-3">
-                    <span class="text-slate-600">${d.t}</span>
-                    <span class="font-semibold ${severityColors[d.s] || 'text-slate-400'} uppercase">[${d.s}]</span>
-                    <span class="text-slate-400">${d.ip}</span>
-                    <span class="text-slate-300">${d.msg}</span>
-                </div>`).join('');
+            if (callback) callback();
         });
 }
+
+function updateRecentAlerts(callback) {
+    fetch('<?= APP_URL ?>/dashboard/api/get_alerts.php?limit=8')
+        .then(r => r.json())
+        .then(d => {
+            if (callback) callback();
+            if (!d.alerts) return;
+            const list = document.getElementById('recent-alerts-list');
+            if (!list) return;
+            
+            if (d.alerts.length === 0) {
+                list.innerHTML = `
+                    <div class="px-5 py-10 text-center text-slate-600 text-sm">
+                        <i data-lucide="shield-check" class="w-8 h-8 mx-auto mb-2 text-slate-700"></i>
+                        No alerts found. System is secure.
+                    </div>`;
+                lucide.createIcons();
+                return;
+            }
+
+            const sevColors = {
+                critical: 'bg-red-500',
+                high:     'bg-orange-400',
+                medium:   'bg-yellow-400',
+                low:      'bg-blue-400',
+                info:     'bg-slate-500'
+            };
+
+            const sevBadgeClasses = {
+                critical: 'bg-red-500/20 text-red-400 border-red-500/30',
+                high:     'bg-orange-500/20 text-orange-400 border-orange-500/30',
+                medium:   'bg-yellow-500/20 text-yellow-400 border-yellow-500/20',
+                low:      'bg-blue-500/20 text-blue-400 border-blue-500/20',
+                info:     'bg-slate-500/20 text-slate-400 border-slate-500/20'
+            };
+
+            list.innerHTML = d.alerts.map(a => {
+                const dotCls = sevColors[a.severity] || 'bg-slate-500';
+                const badgeCls = sevBadgeClasses[a.severity] || 'bg-slate-500/20 text-slate-400';
+                const label = a.severity.charAt(0).toUpperCase() + a.severity.slice(1);
+                
+                return `
+                <div class="alert-row flex items-center gap-4 px-5 py-3.5 cursor-pointer transition-colors"
+                     onclick="window.location='alerts.php?id=${a.id}'">
+                    <div class="w-2 h-2 rounded-full flex-shrink-0 ${dotCls}"></div>
+                    <div class="flex-1 min-w-0">
+                        <div class="text-sm font-medium text-slate-200 truncate">${escHtml(a.title)}</div>
+                        <div class="text-xs text-slate-500 mt-0.5">
+                            ${escHtml(a.source_ip || 'Unknown')}
+                            · ${escHtml(a.attack_type || 'Unknown')}
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3 flex-shrink-0">
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${badgeCls}">${label}</span>
+                        <span class="text-xs text-slate-600">${getTimeAgo(a.created_at)}</span>
+                    </div>
+                </div>`;
+            }).join('');
+            
+            lucide.createIcons();
+        }).catch(() => {
+            if (callback) callback();
+        });
+}
+
+function getTimeAgo(dateStr) {
+    if (!dateStr) return '—';
+    const parts = dateStr.split(/[- :]/);
+    const date = new Date(Date.UTC(parts[0], parts[1]-1, parts[2], parts[3], parts[4], parts[5]));
+    const diff = Math.floor((new Date() - date) / 1000);
+    if (diff < 60) return diff + 's ago';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
+}
+
+function updateStats(callback) {
+    fetch('<?= APP_URL ?>/dashboard/api/stats.php?type=overview')
+        .then(r => r.json())
+        .then(d => {
+            if (callback) callback();
+            if (!d.stats) return;
+            
+            const mapping = {
+                total_alerts: d.stats.total_alerts,
+                critical_alerts: d.stats.critical_alerts,
+                blocked_ips: d.stats.blocked_ips,
+                ai_reports: d.stats.ai_reports
+            };
+
+            for (const [key, val] of Object.entries(mapping)) {
+                const el = document.querySelector(`[data-stat-key="${key}"]`);
+                if (el) {
+                    const startVal = parseInt(el.textContent.replace(/,/g, '')) || 0;
+                    animateCounter(el, startVal, val);
+                }
+            }
+        }).catch(() => {
+            if (callback) callback();
+        });
+}
+
+function animateCounter(el, start, end) {
+    if (start === end) return;
+    const duration = 1000;
+    const startTime = performance.now();
+    
+    function update(now) {
+        const progress = Math.min((now - startTime) / duration, 1);
+        const value = Math.floor(start + progress * (end - start));
+        el.textContent = value.toLocaleString();
+        if (progress < 1) {
+            requestAnimationFrame(update);
+        }
+    }
+    requestAnimationFrame(update);
+}
+
+// Global Manual Refresh
+function triggerOverviewRefresh() {
+    loadChartData(); // updates threat activity and severity donut charts
+    updateAttackFeed();
+    updateRecentAlerts();
+    updateStats();
+}
+
+// Initial feed updates
 updateAttackFeed();
-setInterval(updateAttackFeed, 15000);
+
+// Listen to global SSE events for real-time overview updates
+window.addEventListener('new-security-alert', e => {
+    console.log('Overview page received real-time alert SSE:', e.detail);
+    
+    // Quietly update all metrics without page block
+    loadChartData();
+    updateAttackFeed();
+    updateRecentAlerts();
+    updateStats();
+});
 
 function clearFeed() {
     document.getElementById('attack-feed').innerHTML = '<div class="text-slate-600">Feed cleared.</div>';

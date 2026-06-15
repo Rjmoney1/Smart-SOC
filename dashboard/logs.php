@@ -41,16 +41,19 @@ include __DIR__ . '/includes/header.php';
                 <div class="animate-in flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
                         <h2 class="text-xl font-bold text-white">System Logs</h2>
-                        <p class="text-slate-500 text-sm mt-0.5"><?= number_format($paginated['total']) ?> total log entries</p>
+                        <p id="logs-count-display" class="text-slate-500 text-sm mt-0.5"><?= number_format($paginated['total']) ?> total log entries</p>
                     </div>
                     <div class="flex items-center gap-2">
-                        <button onclick="window.location='?export=csv&type=<?= urlencode($type) ?>&search=<?= urlencode($search) ?>'"
+                        <button onclick="triggerLogsManualRefresh()" class="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/5 transition-colors">
+                            <i id="logs-refresh-icon" data-lucide="refresh-cw" class="w-4 h-4"></i> Refresh
+                        </button>
+                        <button onclick="window.location='api/get_logs.php?export=csv&type=<?= urlencode($type) ?>&search=<?= urlencode($search) ?>'"
                                 class="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/5 transition-colors">
                             <i data-lucide="download" class="w-4 h-4"></i> Export CSV
                         </button>
-                        <button onclick="startAutoRefresh()" id="auto-refresh-btn"
+                        <button onclick="toggleLogsAutoRefresh()" id="auto-refresh-btn"
                                 class="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/5 transition-colors">
-                            <i data-lucide="refresh-cw" class="w-4 h-4"></i> Auto Refresh
+                            <i id="auto-refresh-icon" data-lucide="refresh-cw" class="w-4 h-4"></i> Auto Refresh
                         </button>
                     </div>
                 </div>
@@ -98,7 +101,7 @@ include __DIR__ . '/includes/header.php';
                                     <th class="text-left text-xs font-semibold text-slate-500 px-5 py-3.5 uppercase tracking-wide w-28">User</th>
                                 </tr>
                             </thead>
-                            <tbody class="divide-y divide-white/5 font-mono">
+                            <tbody id="logs-table-body" class="divide-y divide-white/5 font-mono">
                                 <?php if (empty($logs)): ?>
                                 <tr>
                                     <td colspan="7" class="px-5 py-12 text-center text-slate-600">
@@ -139,6 +142,7 @@ include __DIR__ . '/includes/header.php';
                     </div>
 
                     <!-- Pagination -->
+                    <div id="logs-pagination-container">
                     <?php if ($paginated['total_pages'] > 1): ?>
                     <div class="flex items-center justify-between px-5 py-4 border-t border-white/5">
                         <span class="text-xs text-slate-500 font-sans">
@@ -165,6 +169,7 @@ include __DIR__ . '/includes/header.php';
                         </div>
                     </div>
                     <?php endif; ?>
+                    </div>
                 </div>
 
             </div>
@@ -173,22 +178,188 @@ include __DIR__ . '/includes/header.php';
 </div>
 
 <script>
-let refreshInterval = null;
-function startAutoRefresh() {
+const filterType   = '<?= $type ?>';
+const filterSearch = '<?= urlencode($search) ?>';
+const currentPage  = <?= $page ?>;
+const itemsPerPage = <?= ITEMS_PER_PAGE ?>;
+
+let isRefreshing = false;
+
+function updateLogsTable(callback) {
+    if (isRefreshing) return;
+    isRefreshing = true;
+
+    fetch(`<?= APP_URL ?>/dashboard/api/get_logs.php?type=${filterType}&search=${filterSearch}&page=${currentPage}&limit=${itemsPerPage}`)
+        .then(r => r.json())
+        .then(d => {
+            isRefreshing = false;
+            if (callback) callback();
+            if (!d.logs) return;
+
+            // Update log count display
+            const countDisplay = document.getElementById('logs-count-display');
+            if (countDisplay && d.total !== undefined) {
+                countDisplay.textContent = `${d.total.toLocaleString()} total log entries`;
+            }
+
+            // Update table body
+            const tbody = document.getElementById('logs-table-body');
+            if (!tbody) return;
+
+            if (d.logs.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="7" class="px-5 py-12 text-center text-slate-600">
+                            <i data-lucide="scroll-text" class="w-10 h-10 mx-auto mb-3 text-slate-700"></i>
+                            <p class="text-sm font-sans">No logs found matching your filters.</p>
+                        </td>
+                    </tr>`;
+                lucide.createIcons();
+                return;
+            }
+
+            const typeColors = {
+                auth:   'bg-blue-500/10 text-blue-400',
+                attack: 'bg-red-500/10 text-red-400',
+                system: 'bg-slate-500/10 text-slate-400',
+                api:    'bg-purple-500/10 text-purple-400'
+            };
+
+            const sevBadgeClasses = {
+                critical: 'bg-red-500/20 text-red-400 border-red-500/30',
+                high:     'bg-orange-500/20 text-orange-400 border-orange-500/30',
+                medium:   'bg-yellow-500/20 text-yellow-400 border-yellow-500/20',
+                low:      'bg-blue-500/20 text-blue-400 border-blue-500/20',
+                info:     'bg-slate-500/20 text-slate-400 border-slate-500/30'
+            };
+
+            tbody.innerHTML = d.logs.map(log => {
+                const typeCls = typeColors[log.type] || 'bg-slate-500/10 text-slate-400';
+                const typeLabel = log.type.charAt(0).toUpperCase() + log.type.slice(1);
+                
+                const sev = log.severity || 'info';
+                const badgeCls = sevBadgeClasses[sev] || 'bg-slate-500/20 text-slate-400 border-slate-500/30';
+                const sevLabel = sev.charAt(0).toUpperCase() + sev.slice(1);
+
+                // Format timestamp (e.g. "Jun 15 23:19:00")
+                let formattedTime = '—';
+                if (log.created_at) {
+                    const date = new Date(log.created_at.replace(/-/g, '/')); // browser compatible parsing
+                    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                    const pad = n => String(n).padStart(2, '0');
+                    formattedTime = `${months[date.getMonth()]} ${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+                }
+
+                return `
+                <tr class="alert-row transition-colors">
+                    <td class="px-5 py-3 text-xs text-slate-600">${formattedTime}</td>
+                    <td class="px-5 py-3">
+                        <span class="text-xs px-2 py-0.5 rounded-md font-medium font-sans ${typeCls}">
+                            ${escHtml(typeLabel)}
+                        </span>
+                    </td>
+                    <td class="px-5 py-3 text-xs text-slate-400">${escHtml(log.action)}</td>
+                    <td class="px-5 py-3 text-xs text-slate-300 max-w-sm truncate">
+                        <span title="${escHtml(log.message)}">${escHtml(log.message)}</span>
+                    </td>
+                    <td class="px-5 py-3">
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${badgeCls}">${sevLabel}</span>
+                    </td>
+                    <td class="px-5 py-3 text-xs text-slate-500">${escHtml(log.ip_address || '—')}</td>
+                    <td class="px-5 py-3 text-xs text-slate-500">${escHtml(log.username || 'System')}</td>
+                </tr>`;
+            }).join('');
+
+            // Update Pagination
+            const paginationContainer = document.getElementById('logs-pagination-container');
+            if (paginationContainer) {
+                if (d.total_pages <= 1) {
+                    paginationContainer.innerHTML = '';
+                } else {
+                    const startItem = (currentPage - 1) * itemsPerPage + 1;
+                    const endItem = Math.min(currentPage * itemsPerPage, d.total);
+                    
+                    let linksHtml = '';
+                    
+                    // Left chevron
+                    if (currentPage > 1) {
+                        linksHtml += `
+                        <a href="?page=${currentPage - 1}&type=${filterType}&search=${filterSearch}" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors">
+                            <i data-lucide="chevron-left" class="w-4 h-4"></i>
+                        </a>`;
+                    }
+                    
+                    // Page numbers (max 5)
+                    const minPage = Math.max(1, currentPage - 2);
+                    const maxPage = Math.min(d.total_pages, currentPage + 2);
+                    for (let p = minPage; p <= maxPage; p++) {
+                        const activeCls = p === currentPage 
+                            ? 'bg-brand-600/30 text-brand-400 border border-brand-500/30' 
+                            : 'text-slate-500 hover:text-white hover:bg-white/5';
+                        linksHtml += `
+                        <a href="?page=${p}&type=${filterType}&search=${filterSearch}"
+                           class="w-8 h-8 rounded-lg text-xs font-medium flex items-center justify-center transition-colors font-sans ${activeCls}">
+                            ${p}
+                        </a>`;
+                    }
+                    
+                    // Right chevron
+                    if (currentPage < d.total_pages) {
+                        linksHtml += `
+                        <a href="?page=${currentPage + 1}&type=${filterType}&search=${filterSearch}" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors">
+                            <i data-lucide="chevron-right" class="w-4 h-4"></i>
+                        </a>`;
+                    }
+
+                    paginationContainer.innerHTML = `
+                    <div class="flex items-center justify-between px-5 py-4 border-t border-white/5">
+                        <span class="text-xs text-slate-500 font-sans">
+                            Showing ${startItem}–${endItem} of ${d.total.toLocaleString()}
+                        </span>
+                        <div class="flex items-center gap-1">
+                            ${linksHtml}
+                        </div>
+                    </div>`;
+                }
+            }
+
+            lucide.createIcons();
+        })
+        .catch(err => {
+            isRefreshing = false;
+            if (callback) callback();
+            console.error('Error fetching logs:', err);
+        });
+}
+
+function triggerLogsManualRefresh() {
+    updateLogsTable();
+}
+
+let autoRefreshInterval = null;
+
+function toggleLogsAutoRefresh() {
     const btn = document.getElementById('auto-refresh-btn');
-    if (refreshInterval) {
-        clearInterval(refreshInterval);
-        refreshInterval = null;
-        btn.innerHTML = '<i data-lucide="refresh-cw" class="w-4 h-4"></i> Auto Refresh';
+    
+    if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval);
+        autoRefreshInterval = null;
+        btn.innerHTML = '<i id="auto-refresh-icon" data-lucide="refresh-cw" class="w-4 h-4"></i> Auto Refresh';
         btn.classList.remove('text-green-400', 'border-green-500/30');
         lucide.createIcons();
     } else {
-        refreshInterval = setInterval(() => location.reload(), 10000);
-        btn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Refreshing...';
+        triggerLogsManualRefresh();
+        autoRefreshInterval = setInterval(() => {
+            updateLogsTable();
+        }, 10000);
+        
+        btn.innerHTML = '<i id="auto-refresh-icon" data-lucide="refresh-cw" class="w-4 h-4"></i> Auto Refresh';
         btn.classList.add('text-green-400', 'border-green-500/30');
         lucide.createIcons();
     }
 }
+
+function escHtml(t) { const d = document.createElement('div'); d.textContent = t || ''; return d.innerHTML; }
 </script>
 
 <?php include __DIR__ . '/includes/footer.php'; ?>

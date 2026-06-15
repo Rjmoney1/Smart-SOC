@@ -37,6 +37,7 @@ logger = logging.getLogger('PacketCapture')
 # ── DB Config ──────────────────────────────────────────────────────────────────
 DB_CONFIG = {
     'host':    os.getenv('DB_HOST', 'db'),
+    'port':    int(os.getenv('DB_PORT', '3306')),
     'user':    os.getenv('DB_USER', 'cyberai'),
     'password':os.getenv('DB_PASS', 'CyberAI_Secure_2024!'),
     'db':      os.getenv('DB_NAME', 'cyber_ai_platform'),
@@ -44,8 +45,8 @@ DB_CONFIG = {
 }
 
 # ── Thresholds (overridden by DB settings table at runtime) ────────────────────
-PORT_SCAN_THRESH    = int(os.getenv('PORT_SCAN_THRESHOLD',    '15'))   # unique ports in window
-CONN_FLOOD_THRESH   = int(os.getenv('CONN_FLOOD_THRESHOLD',  '200'))  # TCP conns/min
+PORT_SCAN_THRESH    = int(os.getenv('PORT_SCAN_THRESHOLD',    '50'))   # unique ports in window
+CONN_FLOOD_THRESH   = int(os.getenv('CONN_FLOOD_THRESHOLD',  '1000'))  # TCP conns/min
 ICMP_FLOOD_THRESH   = int(os.getenv('ICMP_FLOOD_THRESHOLD',  '100'))  # ICMP pkts/min
 SSH_FAIL_THRESH     = int(os.getenv('SSH_FAIL_THRESHOLD',    '5'))    # failed SSH in window
 WINDOW_SECONDS      = int(os.getenv('DETECTION_WINDOW_SEC',  '60'))
@@ -202,14 +203,14 @@ class RealPacketCapture:
                 """, (
                     title, description, severity, attack_type,
                     source_ip, target_port, protocol, risk,
-                    datetime.now(), datetime.now()
+                    datetime.utcnow(), datetime.utcnow()
                 ))
                 # Also log it
                 cur.execute("""
                     INSERT INTO logs (type, action, message, severity, ip_address, created_at)
                     VALUES ('attack', %s, %s, %s, %s, %s)
                 """, (attack_type.lower().replace(' ', '_'),
-                      f"[REAL] {title}", severity, source_ip, datetime.now()))
+                      f"[REAL] {title}", severity, source_ip, datetime.utcnow()))
             conn.commit()
             conn.close()
 
@@ -235,14 +236,14 @@ class RealPacketCapture:
                     ON DUPLICATE KEY UPDATE is_active=1, reason=%s, blocked_at=%s
                 """, (ip,
                       f"Auto-blocked: {self.block_counts[ip]} alerts ({reason})",
-                      datetime.now(),
+                      datetime.utcnow(),
                       f"Auto-blocked: {self.block_counts[ip]} alerts ({reason})",
-                      datetime.now()))
+                      datetime.utcnow()))
                 cur.execute("""
                     INSERT INTO logs (type, action, message, severity, ip_address, created_at)
                     VALUES ('system','auto_block',%s,'high',%s,%s)
                 """, (f"IP {ip} auto-blocked after {self.block_counts[ip]} real alerts",
-                      ip, datetime.now()))
+                      ip, datetime.utcnow()))
             conn.commit()
             conn.close()
             self.block_counts[ip] = 0
@@ -337,7 +338,7 @@ class RealPacketCapture:
                     )
 
                 # ── Suspicious HTTP payload inspection ─────────────────────────
-                if dport in (80, 8080, 443, 8443) and pkt.haslayer(Raw):
+                if dport in (80, 8080) and pkt.haslayer(Raw):
                     try:
                         payload = pkt[Raw].load.decode('utf-8', errors='ignore')
                         if SUSPICIOUS_RE.search(payload):
@@ -534,7 +535,7 @@ class RealPacketCapture:
                     INSERT INTO logs (type, action, message, severity, ip_address, created_at)
                     VALUES ('system','startup',
                             %s,'info','127.0.0.1',%s)
-                """, (f"Real Packet Capture Engine started on {INTERFACE}", datetime.now()))
+                """, (f"Real Packet Capture Engine started on {INTERFACE}", datetime.utcnow()))
             conn.commit(); conn.close()
         except Exception:
             pass

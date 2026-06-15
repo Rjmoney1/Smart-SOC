@@ -44,11 +44,14 @@ include __DIR__ . '/includes/header.php';
                 <div class="animate-in flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
                         <h2 class="text-xl font-bold text-white">Security Alerts</h2>
-                        <p class="text-slate-500 text-sm mt-0.5">
+                        <p id="alerts-count-display" class="text-slate-500 text-sm mt-0.5">
                             <?= number_format($paginated['total']) ?> total alerts
                         </p>
                     </div>
                     <div class="flex items-center gap-2">
+                        <button onclick="triggerManualRefresh()" class="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/5 transition-colors">
+                            <i id="manual-refresh-icon" data-lucide="refresh-cw" class="w-4 h-4"></i> Refresh
+                        </button>
                         <button onclick="exportAlerts()" class="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/5 transition-colors">
                             <i data-lucide="download" class="w-4 h-4"></i> Export
                         </button>
@@ -114,7 +117,7 @@ include __DIR__ . '/includes/header.php';
                        class="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold border transition-all
                               <?= $isActive ? $bg . ' ' . $tc . ' border-current' : 'text-slate-500 bg-white/3 border-white/5 hover:text-slate-300 hover:bg-white/8' ?>">
                         <?= $label ?>
-                        <span class="text-[10px] font-bold"><?= $count ?></span>
+                        <span class="text-[10px] font-bold sev-count-badge" data-sev="<?= $val ?>"><?= $count ?></span>
                     </a>
                     <?php endforeach; ?>
                 </div>
@@ -133,7 +136,7 @@ include __DIR__ . '/includes/header.php';
                                 <th class="text-right text-xs font-semibold text-slate-500 px-5 py-3.5 uppercase tracking-wide">Actions</th>
                             </tr>
                         </thead>
-                        <tbody class="divide-y divide-white/5">
+                        <tbody id="alerts-table-body" class="divide-y divide-white/5">
                             <?php if (empty($alerts)): ?>
                             <tr>
                                 <td colspan="7" class="px-5 py-12 text-center text-slate-600">
@@ -319,6 +322,141 @@ function exportAlerts() {
 }
 
 function escHtml(t) { const d = document.createElement('div'); d.textContent = t || ''; return d.innerHTML; }
+
+// --- Auto-Refresh Real-Time Alerts Logic ---
+const filterSeverity = '<?= $severity ?>';
+const filterStatus   = '<?= $status ?>';
+const filterSearch   = '<?= urlencode($search) ?>';
+const currentPage    = <?= $page ?>;
+
+function getSeverityBadge(sev) {
+    const classes = {
+        'critical': 'bg-red-500/20 text-red-400 border-red-500/30',
+        'high':     'bg-orange-500/20 text-orange-400 border-orange-500/30',
+        'medium':   'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+        'low':      'bg-blue-500/20 text-blue-400 border-blue-500/30',
+        'info':     'bg-slate-500/20 text-slate-400 border-slate-500/30',
+    };
+    const cls = classes[sev] || 'bg-slate-500/20 text-slate-400 border-slate-500/30';
+    const label = sev.charAt(0).toUpperCase() + sev.slice(1);
+    return `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${cls}">${label}</span>`;
+}
+
+function getStatusBadge(status) {
+    const classes = {
+        'open':          'text-red-400 bg-red-500/10 border-red-500/20',
+        'investigating': 'text-yellow-400 bg-yellow-500/10 border-yellow-500/20',
+        'resolved':      'text-green-400 bg-green-500/10 border-green-500/20',
+        'false_positive':'text-slate-400 bg-slate-500/10 border-slate-500/20'
+    };
+    const cls = classes[status] || 'text-slate-400 bg-slate-500/10 border-slate-500/20';
+    const label = status.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    return `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${cls}">${label}</span>`;
+}
+
+function getTimeAgo(dateStr) {
+    if (!dateStr) return '—';
+    const parts = dateStr.split(/[- :]/);
+    const date = new Date(Date.UTC(parts[0], parts[1]-1, parts[2], parts[3], parts[4], parts[5]));
+    const diff = Math.floor((new Date() - date) / 1000);
+    if (diff < 60) return diff + 's ago';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    if (diff < 2592000) return Math.floor(diff / 86400) + 'd ago';
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+let isRefreshing = false;
+
+function updateAlertsTable(callback) {
+    if (isRefreshing) return;
+    isRefreshing = true;
+
+    fetch(`<?= APP_URL ?>/dashboard/api/get_alerts.php?severity=${filterSeverity}&status=${filterStatus}&search=${filterSearch}&page=${currentPage}&limit=20`)
+        .then(r => r.json())
+        .then(d => {
+            isRefreshing = false;
+            if (callback) callback();
+
+            if (!d.alerts) return;
+
+            const countDisplay = document.getElementById('alerts-count-display');
+            if (countDisplay && d.total !== undefined) {
+                countDisplay.innerHTML = `${d.total.toLocaleString()} total alerts`;
+            }
+
+            // Update severity tab counts dynamically
+            if (d.severity_counts) {
+                document.querySelectorAll('.sev-count-badge').forEach(badge => {
+                    const sev = badge.getAttribute('data-sev');
+                    const key = sev === '' ? 'all' : sev;
+                    if (d.severity_counts[key] !== undefined) {
+                        badge.textContent = d.severity_counts[key];
+                    }
+                });
+            }
+
+            const tbody = document.getElementById('alerts-table-body');
+            if (d.alerts.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="7" class="px-5 py-12 text-center text-slate-600">
+                            <i data-lucide="shield-check" class="w-10 h-10 mx-auto mb-3 text-slate-700"></i>
+                            <p class="text-sm">No alerts found matching your filters.</p>
+                        </td>
+                    </tr>`;
+                lucide.createIcons();
+                return;
+            }
+
+            tbody.innerHTML = d.alerts.map(a => `
+                <tr class="alert-row transition-colors cursor-pointer" onclick="showAlertDetail(${a.id})">
+                    <td class="px-5 py-4">
+                        <div class="font-medium text-sm text-slate-200 truncate max-w-xs">${escHtml(a.title)}</div>
+                        <div class="text-xs text-slate-600 mt-0.5 truncate max-w-xs hidden sm:block">${escHtml(a.description ? a.description.substring(0, 60) : '')}...</div>
+                    </td>
+                    <td class="px-5 py-4 hidden md:table-cell">
+                        <span class="font-mono text-xs text-slate-300">${escHtml(a.source_ip || '—')}</span>
+                    </td>
+                    <td class="px-5 py-4 hidden lg:table-cell">
+                        <span class="text-xs text-slate-400">${escHtml(a.attack_type || 'Unknown')}</span>
+                    </td>
+                    <td class="px-5 py-4">${getSeverityBadge(a.severity)}</td>
+                    <td class="px-5 py-4 hidden sm:table-cell">${getStatusBadge(a.status || 'open')}</td>
+                    <td class="px-5 py-4 hidden lg:table-cell text-xs text-slate-600">${getTimeAgo(a.created_at)}</td>
+                    <td class="px-5 py-4 text-right">
+                        <div class="flex items-center justify-end gap-1" onclick="event.stopPropagation()">
+                            <button onclick="showAlertDetail(${a.id})" class="p-1.5 rounded-lg text-slate-500 hover:text-brand-400 hover:bg-brand-500/10 transition-colors" title="View">
+                                <i data-lucide="eye" class="w-3.5 h-3.5"></i>
+                            </button>
+                            <button onclick="analyzeAlert(${a.id})" class="p-1.5 rounded-lg text-slate-500 hover:text-purple-400 hover:bg-purple-500/10 transition-colors" title="AI Analysis">
+                                <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
+                            </button>
+                            <button onclick="blockIp('${escHtml(a.source_ip || '')}')" class="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors" title="Block IP">
+                                <i data-lucide="ban" class="w-3.5 h-3.5"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>`).join('');
+
+            lucide.createIcons();
+        })
+        .catch(err => {
+            isRefreshing = false;
+            if (callback) callback();
+            console.error('Error fetching alerts:', err);
+        });
+}
+
+function triggerManualRefresh() {
+    updateAlertsTable();
+}
+
+// Listen to SSE updates dynamically instead of page polling
+window.addEventListener('new-security-alert', e => {
+    console.log('New alert received in alerts page:', e.detail);
+    updateAlertsTable();
+});
 </script>
 
 <?php include __DIR__ . '/includes/footer.php'; ?>
