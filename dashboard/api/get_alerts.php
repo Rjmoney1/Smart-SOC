@@ -1,0 +1,65 @@
+<?php
+/**
+ * API: Get Alerts
+ * Supports: count, list, single, feed, CSV export
+ */
+require_once __DIR__ . '/../includes/config.php';
+require_once __DIR__ . '/../includes/db.php';
+require_once __DIR__ . '/../includes/auth.php';
+require_once __DIR__ . '/../includes/functions.php';
+
+auth()->requireLogin();
+header('Content-Type: application/json');
+
+// Count only
+if (isset($_GET['count'])) {
+    $open = db()->count('alerts', "status = 'open'");
+    jsonResponse(['open_count' => $open]);
+}
+
+// Single alert
+if (isset($_GET['id']) && !isset($_GET['export'])) {
+    $id    = (int)$_GET['id'];
+    $alert = db()->fetch("SELECT a.*, u.username FROM alerts a LEFT JOIN users u ON a.user_id = u.id WHERE a.id = ?", [$id]);
+    jsonResponse(['alert' => $alert]);
+}
+
+// CSV export
+if (isset($_GET['export']) && $_GET['export'] === 'csv') {
+    $where  = [];
+    $params = [];
+    if (!empty($_GET['severity'])) { $where[] = "severity=?"; $params[] = $_GET['severity']; }
+    if (!empty($_GET['status']))   { $where[] = "status=?";   $params[] = $_GET['status']; }
+    if (!empty($_GET['search'])) {
+        $s = '%' . $_GET['search'] . '%';
+        $where[] = "(title LIKE ? OR source_ip LIKE ?)";
+        $params  = array_merge($params, [$s, $s]);
+    }
+    $whereStr = $where ? 'WHERE '.implode(' AND ',$where) : '';
+    $alerts   = db()->fetchAll("SELECT id,title,severity,status,source_ip,attack_type,risk_score,created_at FROM alerts $whereStr ORDER BY created_at DESC", $params);
+    exportCsv($alerts, 'alerts_export_' . date('Ymd_His') . '.csv');
+}
+
+// Feed format (for live attack feed)
+if (isset($_GET['format']) && $_GET['format'] === 'feed') {
+    $limit  = min(20, (int)($_GET['limit'] ?? 10));
+    $alerts = db()->fetchAll("SELECT id,title,severity,source_ip,attack_type,created_at FROM alerts ORDER BY created_at DESC LIMIT ?", [$limit]);
+    jsonResponse(['alerts' => $alerts]);
+}
+
+// List alerts
+$limit    = min(100, (int)($_GET['limit'] ?? 20));
+$status   = $_GET['status'] ?? '';
+$severity = $_GET['severity'] ?? '';
+$where    = [];
+$params   = [];
+if ($status)   { $where[] = "status=?";   $params[] = $status; }
+if ($severity) { $where[] = "severity=?"; $params[] = $severity; }
+$whereStr = $where ? 'WHERE '.implode(' AND ',$where) : '';
+
+$alerts = db()->fetchAll(
+    "SELECT a.*, u.username FROM alerts a LEFT JOIN users u ON a.user_id = u.id $whereStr ORDER BY a.created_at DESC LIMIT ?",
+    array_merge($params, [$limit])
+);
+
+jsonResponse(['alerts' => $alerts, 'count' => count($alerts)]);

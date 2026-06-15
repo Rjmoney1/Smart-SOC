@@ -1,0 +1,41 @@
+# Environment Files (Credentials & Keys)
+.env
+.env.backup
+*.env
+
+# Python Environment
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Application Logs
+logs/
+*.log
+python-engine/logs/
+
+# Database / Local Runtime artifacts
+*.sql.gz
+*.sqlite
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*~
+
+# Operating System Files
+Thumbs.db
+db.properties
+.DS_Store
+desktop.ini

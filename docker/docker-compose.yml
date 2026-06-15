@@ -1,0 +1,219 @@
+version: '3.8'
+
+services:
+
+  # ─────────────────────────────────────────────────────
+  # MySQL Database
+  # ─────────────────────────────────────────────────────
+  db:
+    image: mysql:8.0
+    container_name: cyberai_db
+    restart: unless-stopped
+
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: cyber_ai_platform
+      MYSQL_USER: cyberai
+      MYSQL_PASSWORD: CyberAI_Secure_2024!
+
+    ports:
+      - "3306:3306"
+
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ../database/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ../database/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql
+
+    networks:
+      - cyberai_net
+
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+
+  # ─────────────────────────────────────────────────────
+  # PHP Apache Web Server
+  # ─────────────────────────────────────────────────────
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+
+    container_name: cyberai_web
+    restart: unless-stopped
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    ports:
+      - "8090:80"
+
+    volumes:
+      - ../logs:/var/www/html/logs
+
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: cyber_ai_platform
+      DB_USER: cyberai
+      DB_PASS: CyberAI_Secure_2024!
+
+      APP_ENV: development
+      APP_DEBUG: "true"
+      APP_SECRET: CyberAI_Docker_Secret_2024
+
+      SESSION_LIFETIME: 7200
+      SESSION_NAME: cyber_ai_session
+
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: gemini-1.5-pro
+
+    networks:
+      - cyberai_net
+
+
+  # ─────────────────────────────────────────────────────
+  # Python Security Engine
+  # ─────────────────────────────────────────────────────
+  python_engine:
+    build:
+      context: ../python-engine
+      dockerfile: Dockerfile
+
+    container_name: cyberai_python
+    restart: unless-stopped
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    # ── Real packet capture requires raw socket privileges ──
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+
+    volumes:
+      - ../logs:/logs
+      # Mount host auth log for real SSH brute-force detection
+      # Uncomment the line below if running on Linux host:
+      # - /var/log/auth.log:/var/log/auth.log:ro
+
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: cyber_ai_platform
+      DB_USER: cyberai
+      DB_PASS: CyberAI_Secure_2024!
+
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: gemini-1.5-pro
+
+      PYTHON_LOG_MONITOR_INTERVAL: 30
+      PYTHON_PACKET_SNIFF_IFACE: eth0
+      USE_SQLITE: "false"
+
+      # Real capture thresholds (override defaults)
+      PORT_SCAN_THRESHOLD: 15
+      CONN_FLOOD_THRESHOLD: 200
+      ICMP_FLOOD_THRESHOLD: 100
+      SSH_FAIL_THRESHOLD: 5
+      DETECTION_WINDOW_SEC: 60
+      ALERT_COOLDOWN_SEC: 300
+      AUTO_BLOCK_THRESHOLD: 3
+
+    networks:
+      - cyberai_net
+
+
+  # ─────────────────────────────────────────────────────
+  # Traffic Simulator
+  # ─────────────────────────────────────────────────────
+  # ── Real Packet Capture (replaces fake traffic_simulator) ──────────────────
+  real_capture:
+    build:
+      context: ../python-engine
+      dockerfile: Dockerfile
+
+    container_name: cyberai_capture
+    restart: unless-stopped
+
+    command: ["python", "-u", "real_capture.py"]
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    # Raw socket access required for Scapy
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+
+    volumes:
+      - ../logs:/logs
+      # Uncomment for Linux host SSH log monitoring:
+      # - /var/log/auth.log:/var/log/auth.log:ro
+
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: cyber_ai_platform
+      DB_USER: cyberai
+      DB_PASS: CyberAI_Secure_2024!
+      USE_SQLITE: "false"
+      PYTHON_PACKET_SNIFF_IFACE: eth0
+      PORT_SCAN_THRESHOLD: 15
+      CONN_FLOOD_THRESHOLD: 200
+      ICMP_FLOOD_THRESHOLD: 100
+      SSH_FAIL_THRESHOLD: 5
+      DETECTION_WINDOW_SEC: 60
+      ALERT_COOLDOWN_SEC: 300
+      AUTO_BLOCK_THRESHOLD: 3
+
+    networks:
+      - cyberai_net
+
+
+  # ─────────────────────────────────────────────────────
+  # phpMyAdmin
+  # ─────────────────────────────────────────────────────
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: cyberai_pma
+    restart: unless-stopped
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      PMA_USER: root
+      PMA_PASSWORD: rootpassword
+
+    ports:
+      - "8080:80"
+
+    networks:
+      - cyberai_net
+
+
+# ─────────────────────────────────────────────────────
+# Volumes
+# ─────────────────────────────────────────────────────
+volumes:
+  mysql_data:
+    driver: local
+
+
+# ─────────────────────────────────────────────────────
+# Networks
+# ─────────────────────────────────────────────────────
+networks:
+  cyberai_net:
+    driver: bridge
