@@ -1,4 +1,4 @@
-# 🛡️ CyberAI Platform
+# 🛡️ Smart-SOC
 
 > **Enterprise-Grade AI-Powered Cybersecurity Monitoring & Automated Incident Response Platform**
 
